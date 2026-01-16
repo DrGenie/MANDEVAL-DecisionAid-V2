@@ -1,1202 +1,1160 @@
+// MandEval – main logic
 
-(function(){
-  'use strict';
+// --- Global state -----------------------------------------------------------
 
-  const $ = (sel) => document.querySelector(sel);
-  const $$ = (sel) => Array.from(document.querySelectorAll(sel));
-
-  const STORAGE_SCENARIOS = 'MANDEVAL_SCENARIOS';
-  const STORAGE_SETTINGS = 'MANDEVAL_SETTINGS';
-
-  const state = {
-    settings: {
-      horizon: '1 year',
-      currencyLabel: 'local currency units',
-      vslScheme: 'vsl',
-      vslValue: 0
-    },
-    config: null,
-    costs: null,
-    scenarios: [],
+const state = {
+    currentConfig: null,
+    savedScenarios: [],
     charts: {
-      mrsChart: null
+        supportChart: null,
+        benefitCostChart: null,
+        mrsChart: null
     }
-  };
+};
 
-  /* Mixed logit mean coefficients for each country and outbreak scenario
-     Order is: Australia mild, Australia severe, Italy mild, Italy severe, France mild, France severe
-  */
-  const mxlCoefs = {
-    AU: {
-      mild: {
-        ascPolicyA: 0.464,
-        ascOptOut: -0.572,
-        scopeAll: -0.319,
-        exMedRel: -0.157,
-        exMedRelPers: -0.267,
-        cov70: 0.171,
-        cov90: 0.158,
-        lives: 0.072
-      },
-      severe: {
-        ascPolicyA: 0.535,
-        ascOptOut: -0.694,
-        scopeAll: 0.190,
-        exMedRel: -0.181,
-        exMedRelPers: -0.305,
-        cov70: 0.371,
-        cov90: 0.398,
-        lives: 0.079
-      }
+// Mixed logit mean coefficients by country and outbreak scenario
+// Coefficients correspond to Table 3 in the manuscript (means only).
+// ASC_A: alternative specific constant for Policy A
+// ASC_OPT: alternative specific constant for opt-out ("no mandate")
+// Other coefficients are dummy-coded (reference categories described in the paper).
+const mxlCoeffs = {
+    Australia: {
+        mild: {
+            ascA: 0.464,
+            ascOpt: -0.572,
+            scopeAll: -0.319,
+            exMedRel: -0.157,
+            exMedRelPers: -0.267,
+            cov70: 0.171,
+            cov90: 0.158,
+            lives: 0.072
+        },
+        severe: {
+            ascA: 0.535,
+            ascOpt: -0.694,
+            scopeAll: 0.190,
+            exMedRel: -0.181,
+            exMedRelPers: -0.305,
+            cov70: 0.371,
+            cov90: 0.398,
+            lives: 0.079
+        }
     },
-    IT: {
-      mild: {
-        ascPolicyA: 0.625,
-        ascOptOut: -0.238,
-        scopeAll: -0.276,
-        exMedRel: -0.176,
-        exMedRelPers: -0.289,
-        cov70: 0.185,
-        cov90: 0.148,
-        lives: 0.039
-      },
-      severe: {
-        ascPolicyA: 0.799,
-        ascOptOut: -0.463,
-        scopeAll: 0.174,
-        exMedRel: -0.178,
-        exMedRelPers: -0.207,
-        cov70: 0.305,
-        cov90: 0.515,
-        lives: 0.045
-      }
+    Italy: {
+        mild: {
+            ascA: 0.625,
+            ascOpt: -0.238,
+            scopeAll: -0.276,
+            exMedRel: -0.176,
+            exMedRelPers: -0.289,
+            cov70: 0.185,
+            cov90: 0.148,
+            lives: 0.039
+        },
+        severe: {
+            ascA: 0.799,
+            ascOpt: -0.463,
+            scopeAll: 0.174,
+            exMedRel: -0.178,
+            exMedRelPers: -0.207,
+            cov70: 0.305,
+            cov90: 0.515,
+            lives: 0.045
+        }
     },
-    FR: {
-      mild: {
-        ascPolicyA: 0.899,
-        ascOptOut: 0.307,
-        scopeAll: -0.160,
-        exMedRel: -0.121,
-        exMedRelPers: -0.124,
-        cov70: 0.232,
-        cov90: 0.264,
-        lives: 0.049
-      },
-      severe: {
-        ascPolicyA: 0.884,
-        ascOptOut: 0.083,
-        scopeAll: -0.019,
-        exMedRel: -0.192,
-        exMedRelPers: -0.247,
-        cov70: 0.267,
-        cov90: 0.398,
-        lives: 0.052
-      }
+    France: {
+        mild: {
+            ascA: 0.899,
+            ascOpt: 0.307,
+            scopeAll: -0.160,
+            exMedRel: -0.121,
+            exMedRelPers: -0.124,
+            cov70: 0.232,
+            cov90: 0.264,
+            lives: 0.049
+        },
+        severe: {
+            ascA: 0.884,
+            ascOpt: 0.083,
+            scopeAll: -0.019,
+            exMedRel: -0.192,
+            exMedRelPers: -0.247,
+            cov70: 0.267,
+            cov90: 0.398,
+            lives: 0.052
+        }
     }
-  };
+};
 
-  /* Helpers */
+// Precomputed MRS values (lives-saved equivalents) by country and scenario
+// These are used for the bar chart; interpretation text is tailored per configuration.
+const mrsValues = computeAllMRS();
 
-  function showToast(message, type){
-    const container = $('#toast-container');
-    if (!container) return;
-    const toast = document.createElement('div');
-    toast.className = 'toast ' + (type === 'success' ? 'toast-success' : type === 'warning' ? 'toast-warning' : 'toast-error');
-    toast.innerHTML = `
-      <span>${escapeHtml(message)}</span>
-      <button type="button" aria-label="Dismiss">&times;</button>
-    `;
-    container.appendChild(toast);
-    const btn = toast.querySelector('button');
-    btn.addEventListener('click', () => {
-      container.removeChild(toast);
-    });
+// --- Utility functions ------------------------------------------------------
+
+function showToast(message, type = "success") {
+    const toast = document.getElementById("toast");
+    toast.textContent = message;
+    toast.className = "toast show " + (type === "success"
+        ? "toast-success"
+        : type === "warning"
+            ? "toast-warning"
+            : "toast-error");
     setTimeout(() => {
-      if (toast.parentElement === container){
-        container.removeChild(toast);
-      }
-    }, 4500);
-  }
+        toast.classList.remove("show");
+    }, 3500);
+}
 
-  function escapeHtml(str){
-    if (str == null) return '';
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
+function formatNumber(x, decimals = 0) {
+    if (x === null || x === undefined || isNaN(x)) return "–";
+    return x.toLocaleString(undefined, {
+        maximumFractionDigits: decimals,
+        minimumFractionDigits: decimals
+    });
+}
 
-  function formatMoney(value){
-    if (value == null || isNaN(value)) return '–';
-    const v = Number(value);
-    if (!isFinite(v)) return '–';
-    const abs = Math.abs(v);
-    let fmt = v.toFixed(0);
-    if (abs >= 1e9){
-      fmt = (v / 1e9).toFixed(2) + ' bn';
-    } else if (abs >= 1e6){
-      fmt = (v / 1e6).toFixed(2) + ' m';
-    } else if (abs >= 1e3){
-      fmt = (v / 1e3).toFixed(1) + ' k';
-    }
-    return fmt;
-  }
+// --- Tab handling -----------------------------------------------------------
 
-  function formatPercent(value){
-    if (value == null || isNaN(value)) return '–';
-    const v = Number(value);
-    return v.toFixed(1) + '%';
-  }
+function setupTabs() {
+    const buttons = document.querySelectorAll(".tab-btn");
+    const panels = document.querySelectorAll(".tab-panel");
 
-  function countryLabel(code){
-    if (code === 'AU') return 'Australia';
-    if (code === 'FR') return 'France';
-    if (code === 'IT') return 'Italy';
-    return 'Not set';
-  }
+    buttons.forEach(btn => {
+        btn.addEventListener("click", () => {
+            const tab = btn.getAttribute("data-tab");
+            buttons.forEach(b => b.classList.remove("active"));
+            panels.forEach(p => p.classList.remove("active"));
+            btn.classList.add("active");
+            document.getElementById("tab-" + tab).classList.add("active");
+        });
+    });
+}
 
-  function outbreakLabel(code){
-    return code === 'severe' ? 'Severe outbreak' : 'Mild outbreak';
-  }
+// --- Settings: VSL and population ------------------------------------------
 
-  function scopeLabel(code){
-    return code === 'all'
-      ? 'All occupations and public spaces'
-      : 'High-risk occupations only';
-  }
+function applyDefaultVslAndCosts(country) {
+    const vslBasisSelect = document.getElementById("settings-vsl-basis");
+    const vslValueInput = document.getElementById("settings-vsl-value");
+    const vslNote = document.getElementById("settings-vsl-note");
 
-  function exemptionsLabel(code){
-    if (code === 'medrel') return 'Medical + religious';
-    if (code === 'medrelpers') return 'Medical + religious + personal belief';
-    return 'Medical only';
-  }
+    let central, low, high, note;
 
-  function coverageLabel(value){
-    const pct = Number(value) * 100;
-    return pct.toFixed(0) + '% vaccinated';
-  }
-
-  function saveSettingsToState(){
-    const horizon = $('#setting-horizon').value || '1 year';
-    const currencyLabel = $('#setting-currency').value || 'local currency units';
-    const vslScheme = $('#setting-vsl-scheme').value || 'vsl';
-    const vslValue = Number($('#setting-vsl-value').value) || 0;
-
-    state.settings = { horizon, currencyLabel, vslScheme, vslValue };
-    persistSettings();
-    showToast('Settings updated.', 'success');
-    updateDerivedAndUI();
-  }
-
-  function persistSettings(){
-    try {
-      localStorage.setItem(STORAGE_SETTINGS, JSON.stringify(state.settings));
-    } catch(e){
-      // ignore
-    }
-  }
-
-  function loadSettings(){
-    try {
-      const raw = localStorage.getItem(STORAGE_SETTINGS);
-      if (!raw) return;
-      const obj = JSON.parse(raw);
-      if (!obj) return;
-      state.settings = Object.assign({}, state.settings, obj);
-    } catch(e){
-      // ignore parse error
-    }
-  }
-
-  function syncSettingsForm(){
-    $('#setting-horizon').value = state.settings.horizon || '1 year';
-    $('#setting-currency').value = state.settings.currencyLabel || 'local currency units';
-    $('#setting-vsl-scheme').value = state.settings.vslScheme || 'vsl';
-    $('#setting-vsl-value').value = state.settings.vslValue != null ? state.settings.vslValue : 0;
-  }
-
-  function applyConfigFromForm(){
-    const country = $('#cfg-country').value;
-    const outbreak = $('#cfg-outbreak').value;
-    const scope = $('#cfg-scope').value;
-    const exemptions = $('#cfg-exemptions').value;
-    const coverage = parseFloat($('#cfg-coverage').value || '0.5');
-    const popMillions = Number($('#cfg-pop').value) || 0;
-    const livesPer100k = Number($('#cfg-lives').value) || 0;
-
-    if (!country){
-      showToast('Please select a country.', 'warning');
-      return;
-    }
-    if (!mxlCoefs[country] || !mxlCoefs[country][outbreak]){
-      showToast('No preference estimates found for this country and outbreak scenario.', 'error');
-      return;
-    }
-
-    state.config = {
-      country,
-      outbreak,
-      scope,
-      exemptions,
-      coverage,
-      popMillions,
-      livesPer100k
-    };
-
-    updateConfigSummary();
-    updateDerivedAndUI();
-    showToast('Configuration applied.', 'success');
-  }
-
-  function updateConfigSummary(){
-    const empty = $('#cfg-summary-empty');
-    const panel = $('#cfg-summary-panel');
-
-    if (!state.config){
-      if (empty) empty.hidden = false;
-      if (panel) panel.hidden = true;
-      $('#headline-text').textContent =
-        'Apply a configuration to see a concise recommendation that combines predicted public support, mandate design features, indicative costs, benefits and expected public support.';
-      return;
-    }
-
-    const c = state.config;
-    if (empty) empty.hidden = true;
-    if (panel) panel.hidden = false;
-
-    $('#cfg-summary-country').textContent = countryLabel(c.country);
-    $('#cfg-summary-outbreak').textContent = outbreakLabel(c.outbreak);
-    $('#cfg-summary-pop').textContent = c.popMillions.toFixed(1) + ' million';
-    $('#cfg-summary-scope').textContent = scopeLabel(c.scope);
-    $('#cfg-summary-exemptions').textContent = exemptionsLabel(c.exemptions);
-    $('#cfg-summary-coverage').textContent = coverageLabel(c.coverage);
-    $('#cfg-summary-lives').textContent = c.livesPer100k.toFixed(1) + ' per 100,000';
-
-    const support = computeSupportFromMXL(c);
-    if (!isNaN(support)){
-      $('#cfg-summary-support').textContent = formatPercent(support * 100);
+    if (country === "Australia") {
+        // Based on OBPR guidance, inflated to ~5.4m AUD (recent years).
+        central = 5400000;
+        low = 4000000;
+        high = 6500000;
+        note = "Indicative VSL for Australia (AUD, recent OBPR guidance).";
+    } else if (country === "France") {
+        // French guidance around 3–3.2m EUR.
+        central = 3000000;
+        low = 2200000;
+        high = 3800000;
+        note = "Indicative VSL for France (EUR, regulatory impact assessments).";
     } else {
-      $('#cfg-summary-support').textContent = '–';
+        // Italy – mid-point between 1m and 3m EUR.
+        central = 2000000;
+        low = 1300000;
+        high = 3000000;
+        note = "Indicative VSL for Italy (EUR, transport & OECD-based values).";
     }
 
-    updateHeadlineRecommendation(support);
-  }
+    const basis = vslBasisSelect.value;
+    let chosen;
+    if (basis === "low") chosen = low;
+    else if (basis === "high") chosen = high;
+    else if (basis === "central" || basis === "custom") chosen = central;
 
-  function computeSupportFromMXL(cfg){
-    if (!cfg || !cfg.country || !cfg.outbreak) return NaN;
-    const countryCoefs = mxlCoefs[cfg.country];
-    if (!countryCoefs) return NaN;
-    const p = countryCoefs[cfg.outbreak];
-    if (!p) return NaN;
+    if (basis !== "custom") {
+        vslValueInput.value = chosen;
+        vslValueInput.readOnly = false;
+    }
 
-    // Construct Xβ term shared by both mandate alternatives
-    let xb = 0;
-    if (cfg.scope === 'all') xb += p.scopeAll;
-    if (cfg.exemptions === 'medrel') xb += p.exMedRel;
-    else if (cfg.exemptions === 'medrelpers') xb += p.exMedRelPers;
+    vslNote.textContent = note + " You can override with a custom value if needed.";
 
-    if (Math.abs(cfg.coverage - 0.7) < 1e-6) xb += p.cov70;
-    else if (Math.abs(cfg.coverage - 0.9) < 1e-6) xb += p.cov90;
+    // Default costing values by country (simple but realistic scale)
+    const setupPerMillionInput = document.getElementById("cost-setup-per-million");
+    const adminPerPersonPerYearInput = document.getElementById("cost-admin-per-person-per-year");
+    const enforcePerPersonPerYearInput = document.getElementById("cost-enforce-per-person-per-year");
+    const commsPerPersonInput = document.getElementById("cost-comms-per-person");
+    const otherPerPersonInput = document.getElementById("cost-other-per-person");
 
-    xb += p.lives * cfg.livesPer100k;
-
-    const uA = p.ascPolicyA + xb;
-    const uB = xb; // Policy B as reference with same attributes
-    const uN = p.ascOptOut; // no-mandate alternative
-
-    const maxU = Math.max(uA, uB, uN);
-    const expA = Math.exp(uA - maxU);
-    const expB = Math.exp(uB - maxU);
-    const expN = Math.exp(uN - maxU);
-    const denom = expA + expB + expN;
-    if (denom === 0 || !isFinite(denom)) return NaN;
-
-    const probMandate = (expA + expB) / denom;
-    return probMandate;
-  }
-
-  function updateHeadlineRecommendation(support){
-    const p = $('#headline-text');
-    if (!p || !state.config) return;
-
-    const derived = computeDerived();
-    const bcr = derived ? derived.bcr : null;
-    const supPct = !isNaN(support) ? support * 100 : NaN;
-
-    let text = '';
-
-    if (derived && bcr != null && !isNaN(supPct)){
-      if (bcr >= 1 && supPct >= 70){
-        text =
-          'This mandate design appears both cost-effective (benefit–cost ratio above 1) and likely to attract high public support. ' +
-          'It can be considered a strong candidate, subject to operational feasibility and equity considerations.';
-      } else if (bcr >= 1 && supPct < 70){
-        text =
-          'This mandate design appears cost-effective (benefit–cost ratio above 1) but model-based support is moderate. ' +
-          'Additional communication, engagement, or targeted adjustments may be needed for stable implementation.';
-      } else if (bcr < 1 && supPct >= 70){
-        text =
-          'This mandate design is predicted to receive relatively high public support but does not appear cost-effective under current cost and benefit assumptions. ' +
-          'Revisiting cost estimates, targeting, or alternative designs may improve value for money.';
-      } else {
-        text =
-          'Under current assumptions, this mandate design is neither clearly cost-effective nor strongly supported. ' +
-          'It may be better used as a reference scenario while more promising options are explored.';
-      }
+    if (country === "Australia") {
+        setupPerMillionInput.value = 6000000;     // AUD
+        adminPerPersonPerYearInput.value = 10;    // AUD
+        enforcePerPersonPerYearInput.value = 6;   // AUD
+        commsPerPersonInput.value = 5;            // AUD over period
+        otherPerPersonInput.value = 4;            // AUD over period
+    } else if (country === "France") {
+        setupPerMillionInput.value = 5500000;     // EUR
+        adminPerPersonPerYearInput.value = 9;     // EUR
+        enforcePerPersonPerYearInput.value = 5;   // EUR
+        commsPerPersonInput.value = 5;            // EUR
+        otherPerPersonInput.value = 4;            // EUR
     } else {
-      text =
-        'Apply a configuration and enter cost and benefit settings to receive a concise recommendation that combines predicted public support, mandate design features, costs and benefits.';
+        setupPerMillionInput.value = 5000000;     // EUR
+        adminPerPersonPerYearInput.value = 8;     // EUR
+        enforcePerPersonPerYearInput.value = 5;   // EUR
+        commsPerPersonInput.value = 4;            // EUR
+        otherPerPersonInput.value = 4;            // EUR
     }
 
-    p.textContent = text;
-  }
+    // Update readonly country displays
+    document.getElementById("settings-country-display").value = country;
+    document.getElementById("costing-country-display").value = country;
+}
 
-  function applyCostsFromForm(){
-    if (!state.config){
-      showToast('Please apply a configuration before entering costs.', 'warning');
-      return;
+// --- MRS calculations -------------------------------------------------------
+
+function computeAllMRS() {
+    const result = {};
+    ["Australia", "France", "Italy"].forEach(country => {
+        result[country] = {};
+        ["mild", "severe"].forEach(scenario => {
+            const c = mxlCoeffs[country][scenario];
+            const betaLives = c.lives;
+            // Attribute-level lives-saved equivalents (per level change)
+            result[country][scenario] = {
+                scopeAll: -c.scopeAll / betaLives,
+                exMedRel: -c.exMedRel / betaLives,
+                exMedRelPers: -c.exMedRelPers / betaLives,
+                cov70: -c.cov70 / betaLives,
+                cov90: -c.cov90 / betaLives
+            };
+        });
+    });
+    return result;
+}
+
+// Configuration helpers ------------------------------------------------------
+
+function getSelectedScope() {
+    const radios = document.querySelectorAll('input[name="config-scope"]');
+    for (const r of radios) {
+        if (r.checked) return r.value; // "highrisk" or "all"
     }
-    const admin = Number($('#cost-admin').value) || 0;
-    const comm = Number($('#cost-comm').value) || 0;
-    const enforce = Number($('#cost-enforce').value) || 0;
-    const it = Number($('#cost-it').value) || 0;
-    const support = Number($('#cost-support').value) || 0;
-    const total = admin + comm + enforce + it + support;
+    return "highrisk";
+}
 
-    state.costs = { admin, comm, enforce, it, support, total };
+// Predicted public support from mixed logit means
+// U(mandate) = ascA + beta_scope*scope + beta_ex*ex + beta_cov*cov + beta_lives*lives
+// U(opt-out) = ascOpt
+// P = exp(U_m) / (exp(U_m) + exp(U_o))
+function computePredictedSupport(country, scenario, scope, exemptions, coverage, livesPer100k) {
+    const c = mxlCoeffs[country][scenario];
+    if (!c) return null;
 
-    updateCostSummary();
-    updateDerivedAndUI();
-    showToast('Costs applied.', 'success');
-  }
+    let uMandate = c.ascA;
+    let uOpt = c.ascOpt;
 
-  function updateCostSummary(){
-    if (!state.costs || !state.config){
-      $('#cost-total').textContent = '–';
-      $('#cost-per-100k').textContent = '–';
-      $('#cost-per-1m').textContent = '–';
-      return;
+    // Scope
+    if (scope === "all") {
+        uMandate += c.scopeAll;
     }
-    const total = state.costs.total;
-    const pop = state.config.popMillions || 0;
-    const perPerson = pop > 0 ? total / (pop * 1e6) : NaN;
-    const per100k = perPerson * 1e5;
-    const per1m = perPerson * 1e6;
 
-    $('#cost-total').textContent = formatMoney(total) + ' ' + state.settings.currencyLabel;
-    $('#cost-per-100k').textContent = isNaN(per100k) ? '–' : formatMoney(per100k) + ' ' + state.settings.currencyLabel;
-    $('#cost-per-1m').textContent = isNaN(per1m) ? '–' : formatMoney(per1m) + ' ' + state.settings.currencyLabel;
-  }
+    // Exemptions
+    if (exemptions === "medRel") {
+        uMandate += c.exMedRel;
+    } else if (exemptions === "medRelPers") {
+        uMandate += c.exMedRelPers;
+    }
 
-  function computeDerived(){
-    if (!state.config) return null;
-    const cfg = state.config;
-    const settings = state.settings || {};
+    // Coverage
+    if (coverage === 70) {
+        uMandate += c.cov70;
+    } else if (coverage === 90) {
+        uMandate += c.cov90;
+    }
 
-    const pop = cfg.popMillions || 0;
-    const livesPer100k = cfg.livesPer100k || 0;
-    const livesTotal = livesPer100k * (pop * 10); // 10 × 100k blocks per million people
+    // Expected lives saved attribute
+    uMandate += c.lives * livesPer100k;
 
-    const vsl = Number(settings.vslValue) || 0;
-    const totalBenefit = livesTotal * vsl;
+    const expM = Math.exp(uMandate);
+    const expO = Math.exp(uOpt);
+    const p = expM / (expM + expO);
+    return p;
+}
 
-    const totalCost = state.costs ? (state.costs.total || 0) : 0;
-    const netBenefit = totalBenefit - totalCost;
-    const bcr = totalCost > 0 ? (totalBenefit / totalCost) : null;
+// Compute benefits and costs for the current configuration
+function computeEconomics(config) {
+    const periodYears = config.periodYears;
+    const population = config.population;
+    const livesPer100k = config.livesPer100k;
+    const vsl = config.vsl;
 
-    const support = computeSupportFromMXL(cfg);
+    // Total lives saved = lives per 100k × (population/100k) × period
+    const totalLivesSaved = livesPer100k * (population / 100000) * periodYears;
+    const monetaryBenefit = totalLivesSaved * vsl;
+
+    // Costs – convert all cost components to per person over period
+    const setupPerMillion = config.costSetupPerMillion;
+    const adminPerYear = config.costAdminPerPersonPerYear;
+    const enforcePerYear = config.costEnforcePerPersonPerYear;
+    const commsPerPerson = config.costCommsPerPerson;
+    const otherPerPerson = config.costOtherPerPerson;
+
+    const setupPerPerson = setupPerMillion / 1000000;
+    const perPersonOverPeriod =
+        setupPerPerson +
+        (adminPerYear + enforcePerYear) * periodYears +
+        commsPerPerson +
+        otherPerPerson;
+
+    const totalCost = perPersonOverPeriod * population;
+
+    let bcr = null;
+    let netBenefit = null;
+    if (totalCost > 0) {
+        bcr = monetaryBenefit / totalCost;
+        netBenefit = monetaryBenefit - totalCost;
+    }
 
     return {
-      livesTotal,
-      totalBenefit,
-      netBenefit,
-      bcr,
-      support
+        totalLivesSaved,
+        monetaryBenefit,
+        totalCost,
+        netBenefit,
+        bcr
     };
-  }
+}
 
-  function updateResultsSummary(){
-    const derived = computeDerived();
-    if (!derived){
-      $('#result-bcr').textContent = '–';
-      $('#result-net-benefit').textContent = '–';
-      $('#result-support').textContent = '–';
-      $('#result-lives-total').textContent = '–';
-      return;
+// Compute configuration-level lives-saved equivalent vs benchmark
+function computeConfigMRS(config) {
+    const {country, scenario, scope, exemptions, coverage} = config;
+    const c = mxlCoeffs[country][scenario];
+    if (!c) return null;
+
+    let deltaV = 0;
+    if (scope === "all") deltaV += c.scopeAll;
+    if (exemptions === "medRel") deltaV += c.exMedRel;
+    if (exemptions === "medRelPers") deltaV += c.exMedRelPers;
+    if (coverage === 70) deltaV += c.cov70;
+    if (coverage === 90) deltaV += c.cov90;
+
+    const livesEq = -deltaV / c.lives; // lives per 100k
+    return livesEq;
+}
+
+// --- Charts -----------------------------------------------------------------
+
+function destroyChart(chart) {
+    if (chart) {
+        chart.destroy();
     }
+}
 
-    if (derived.bcr != null && isFinite(derived.bcr)){
-      $('#result-bcr').textContent = derived.bcr.toFixed(2);
-    } else {
-      $('#result-bcr').textContent = '–';
-    }
-    $('#result-net-benefit').textContent = formatMoney(derived.netBenefit) + ' ' + state.settings.currencyLabel;
-    $('#result-support').textContent = !isNaN(derived.support) ? formatPercent(derived.support * 100) : '–';
-    $('#result-lives-total').textContent = derived.livesTotal.toFixed(1);
-  }
-
-  function computeMRSRows(){
-    if (!state.config) return [];
-    const cfg = state.config;
-    const countryCoefs = mxlCoefs[cfg.country];
-    if (!countryCoefs) return [];
-    const p = countryCoefs[cfg.outbreak];
-    if (!p || !p.lives) return [];
-
-    const rows = [];
-
-    if (cfg.scope === 'all'){
-      const value = -p.scopeAll / p.lives;
-      rows.push({
-        label: 'Scope: high-risk occupations → all occupations and public spaces',
-        value
-      });
-    }
-
-    if (cfg.exemptions === 'medrel'){
-      const value = -p.exMedRel / p.lives;
-      rows.push({
-        label: 'Exemptions: medical only → medical + religious',
-        value
-      });
-    } else if (cfg.exemptions === 'medrelpers'){
-      const value = -p.exMedRelPers / p.lives;
-      rows.push({
-        label: 'Exemptions: medical only → medical + religious + personal belief',
-        value
-      });
-    }
-
-    if (Math.abs(cfg.coverage - 0.7) < 1e-6){
-      const value = -p.cov70 / p.lives;
-      rows.push({
-        label: 'Coverage threshold: 50% → 70% population vaccinated',
-        value
-      });
-    } else if (Math.abs(cfg.coverage - 0.9) < 1e-6){
-      const value = -p.cov90 / p.lives;
-      rows.push({
-        label: 'Coverage threshold: 50% → 90% population vaccinated',
-        value
-      });
-    }
-
-    return rows;
-  }
-
-  function updateMRSSection(){
-    const tbody = $('#mrs-table tbody');
-    if (!tbody) return;
-    tbody.innerHTML = '';
-
-    const rows = computeMRSRows();
-    if (!rows.length){
-      const tr = document.createElement('tr');
-      tr.className = 'empty-row';
-      tr.innerHTML = '<td colspan="3">Apply a configuration to see lives-saved equivalents for the chosen design.</td>';
-      tbody.appendChild(tr);
-      if (state.charts.mrsChart){
-        state.charts.mrsChart.destroy();
-        state.charts.mrsChart = null;
-      }
-      return;
-    }
-
-    rows.forEach(r => {
-      const tr = document.createElement('tr');
-      let interpretation = '';
-      if (r.value > 0){
-        interpretation =
-          'This change reduces utility by an amount equivalent to losing approximately ' +
-          Math.abs(r.value).toFixed(2) + ' expected lives saved per 100,000 people.';
-      } else if (r.value < 0){
-        interpretation =
-          'This change increases utility by an amount equivalent to gaining approximately ' +
-          Math.abs(r.value).toFixed(2) + ' expected lives saved per 100,000 people.';
-      } else {
-        interpretation = 'No change relative to the reference level for this attribute in the model.';
-      }
-      tr.innerHTML = `
-        <td>${escapeHtml(r.label)}</td>
-        <td>${r.value.toFixed(2)}</td>
-        <td>${escapeHtml(interpretation)}</td>
-      `;
-      tbody.appendChild(tr);
+function renderSupportChart(config) {
+    const ctx = document.getElementById("supportChart").getContext("2d");
+    destroyChart(state.charts.supportChart);
+    state.charts.supportChart = new Chart(ctx, {
+        type: "bar",
+        data: {
+            labels: ["Predicted support"],
+            datasets: [{
+                label: "Support (%)",
+                data: [config.supportPercent],
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {display: false},
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => ctx.parsed.y.toFixed(1) + "%"
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    max: 100,
+                    ticks: {
+                        callback: (v) => v + "%"
+                    }
+                }
+            }
+        }
     });
+}
 
-    updateMRSChart(rows);
-  }
+function renderBenefitCostChart(config) {
+    const ctx = document.getElementById("benefitCostChart").getContext("2d");
+    destroyChart(state.charts.benefitCostChart);
 
-  function updateMRSChart(rows){
-    const ctx = $('#mrsChart');
-    if (!ctx) return;
+    // Convert to millions for readability
+    const benefitM = config.monetaryBenefit / 1e6;
+    const costM = config.totalCost / 1e6;
 
-    const labels = rows.map(r => r.label);
-    const data = rows.map(r => r.value);
+    state.charts.benefitCostChart = new Chart(ctx, {
+        type: "bar",
+        data: {
+            labels: ["Monetary benefit", "Total cost"],
+            datasets: [{
+                label: "Amount (millions)",
+                data: [benefitM, costM],
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {display: false},
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => ctx.parsed.y.toFixed(2) + " million"
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        callback: (v) => v + " m"
+                    }
+                }
+            }
+        }
+    });
+}
 
-    if (state.charts.mrsChart){
-      state.charts.mrsChart.destroy();
-      state.charts.mrsChart = null;
-    }
+function renderMRSChart(config) {
+    const ctx = document.getElementById("mrsChart").getContext("2d");
+    destroyChart(state.charts.mrsChart);
+
+    const {country, scenario} = config;
+    const mrs = mrsValues[country][scenario];
+    const labels = [
+        "Scope: all occupations & public spaces",
+        "Exemptions: medical + religious",
+        "Exemptions: med + religious + personal belief",
+        "Coverage: lift at 70% vs 50%",
+        "Coverage: lift at 90% vs 50%"
+    ];
+    const data = [
+        mrs.scopeAll,
+        mrs.exMedRel,
+        mrs.exMedRelPers,
+        mrs.cov70,
+        mrs.cov90
+    ];
 
     state.charts.mrsChart = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [{
-          label: 'MRS (lives saved per 100,000)',
-          data,
-          backgroundColor: data.map(v => v >= 0 ? 'rgba(220, 38, 38, 0.8)' : 'rgba(22, 163, 74, 0.8)')
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            display: false
-          },
-          tooltip: {
-            callbacks: {
-              label: function(ctx){
-                return ctx.parsed.y.toFixed(2) + ' lives per 100,000';
-              }
-            }
-          }
+        type: "bar",
+        data: {
+            labels,
+            datasets: [{
+                label: "Lives-saved equivalent (per 100,000)",
+                data,
+                borderWidth: 1
+            }]
         },
-        scales: {
-          x: {
-            ticks: {
-              display: false
+        options: {
+            indexAxis: "y",
+            responsive: true,
+            plugins: {
+                legend: {display: false},
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => ctx.parsed.x.toFixed(2) + " lives / 100,000"
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        callback: (v) => v
+                    }
+                }
             }
-          },
-          y: {
-            title: {
-              display: true,
-              text: 'Lives saved per 100,000'
-            }
-          }
         }
-      }
     });
-  }
+}
 
-  function saveScenario(){
-    if (!state.config){
-      showToast('Please apply a configuration first.', 'warning');
-      return;
-    }
-    if (!state.costs){
-      showToast('Please apply costs before saving a scenario.', 'warning');
-      return;
-    }
+// --- UI updates -------------------------------------------------------------
 
-    const derived = computeDerived();
-    if (!derived){
-      showToast('Unable to compute derived results for this configuration.', 'error');
-      return;
-    }
+function updateConfigSummary(config) {
+    const el = document.getElementById("config-summary");
+    const supportText = isFinite(config.supportPercent)
+        ? config.supportPercent.toFixed(1) + "%"
+        : "not available";
 
-    const id = Date.now();
-    const cfg = state.config;
-    const s = {
-      id,
-      label: countryLabel(cfg.country) + ' – ' + outbreakLabel(cfg.outbreak) +
-        ' – ' + (cfg.livesPer100k.toFixed(0)) + ' lives/100k',
-      country: cfg.country,
-      outbreak: cfg.outbreak,
-      scope: cfg.scope,
-      exemptions: cfg.exemptions,
-      coverage: cfg.coverage,
-      popMillions: cfg.popMillions,
-      livesPer100k: cfg.livesPer100k,
-      totalCost: state.costs.total || 0,
-      livesTotal: derived.livesTotal,
-      totalBenefit: derived.totalBenefit,
-      netBenefit: derived.netBenefit,
-      bcr: derived.bcr,
-      support: derived.support,
-      settings: Object.assign({}, state.settings)
-    };
+    const lineScope = config.scope === "all"
+        ? "applies to all occupations and public spaces"
+        : "is targeted to high-risk occupations only";
 
-    state.scenarios.push(s);
-    persistScenarios();
-    rebuildScenariosTable();
-    rebuildResultsTable();
-    showToast('Scenario saved.', 'success');
-  }
+    const exText = config.exemptions === "medical"
+        ? "medical-only exemptions"
+        : config.exemptions === "medRel"
+            ? "medical + religious exemptions"
+            : "medical + religious + personal-belief exemptions";
 
-  function persistScenarios(){
-    try {
-      localStorage.setItem(STORAGE_SCENARIOS, JSON.stringify(state.scenarios));
-    } catch(e){
-      // ignore
-    }
-  }
+    const covText = config.coverage + "% coverage threshold to lift the mandate";
 
-  function loadScenarios(){
-    try {
-      const raw = localStorage.getItem(STORAGE_SCENARIOS);
-      if (!raw) return;
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr)){
-        state.scenarios = arr;
-      }
-    } catch(e){
-      // ignore
-    }
-  }
+    el.innerHTML = `
+        <p><strong>Country:</strong> ${config.country}</p>
+        <p><strong>Outbreak scenario:</strong> ${config.scenarioLabel}</p>
+        <p><strong>Mandate design:</strong> The mandate ${lineScope}, allows <strong>${exText}</strong>,
+           and uses a <strong>${covText}</strong>.</p>
+        <p><strong>Expected lives saved:</strong> ${formatNumber(config.livesPer100k, 1)} per 100,000 people.</p>
+        <p><strong>Model-based public support:</strong> ${supportText} of people are predicted to support this mandate
+           over a “no mandate” option.</p>
+        <p><strong>Evaluation period &amp; population:</strong> ${config.periodYears} year(s),
+           ${formatNumber(config.population)} people exposed.</p>
+    `;
+}
 
-  function rebuildScenariosTable(){
-    const tbody = $('#scenarios-table tbody');
-    if (!tbody) return;
-    tbody.innerHTML = '';
+function updateHeadlineRecommendation(config) {
+    const el = document.getElementById("headline-recommendation");
 
-    if (!state.scenarios.length){
-      const tr = document.createElement('tr');
-      tr.className = 'empty-row';
-      tr.innerHTML = '<td colspan="10">No scenarios saved yet.</td>';
-      tbody.appendChild(tr);
-      return;
+    const support = config.supportPercent;
+    const bcr = config.bcr;
+    const netBen = config.netBenefit;
+
+    let supportBand = "";
+    let supportPhrase = "";
+    if (!isFinite(support)) {
+        supportBand = "unknown";
+        supportPhrase = "Predicted public support cannot be calculated with the current inputs.";
+    } else if (support >= 70) {
+        supportBand = "high";
+        supportPhrase = `Predicted public support is high at around ${support.toFixed(1)}%.`;
+    } else if (support >= 50) {
+        supportBand = "moderate";
+        supportPhrase = `Predicted public support is moderate at around ${support.toFixed(1)}%.`;
+    } else {
+        supportBand = "low";
+        supportPhrase = `Predicted public support is relatively low at around ${support.toFixed(1)}%.`;
     }
 
-    state.scenarios.forEach(s => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${escapeHtml(s.label)}</td>
-        <td>${escapeHtml(countryLabel(s.country))}</td>
-        <td>${escapeHtml(outbreakLabel(s.outbreak))}</td>
-        <td>${escapeHtml(scopeLabel(s.scope))}</td>
-        <td>${escapeHtml(exemptionsLabel(s.exemptions))}</td>
-        <td>${escapeHtml(coverageLabel(s.coverage))}</td>
-        <td>${s.bcr != null ? s.bcr.toFixed(2) : '–'}</td>
-        <td>${formatMoney(s.netBenefit)} ${escapeHtml(state.settings.currencyLabel)}</td>
-        <td>${!isNaN(s.support) ? formatPercent(s.support * 100) : '–'}</td>
-        <td><button type="button" class="btn-ghost btn-remove-scenario" data-id="${s.id}">Remove</button></td>
-      `;
-      tbody.appendChild(tr);
+    let econPhrase = "";
+    let overall = "";
+    if (!isFinite(bcr)) {
+        econPhrase = "Benefits and costs are not fully defined under the current cost assumptions.";
+        overall = "Overall feasibility cannot yet be assessed; please review and complete the costing inputs.";
+    } else if (bcr >= 1.2 && netBen > 0) {
+        econPhrase = `Benefits clearly outweigh costs (BCR ≈ ${bcr.toFixed(2)}, net benefit ${formatNumber(netBen, 0)}).`;
+        if (supportBand === "high" || supportBand === "moderate") {
+            overall = "This configuration offers a strong economic case with acceptable public support.";
+        } else {
+            overall = "Economically attractive, but political and communication strategies will be crucial given limited support.";
+        }
+    } else if (bcr >= 1 && netBen >= 0) {
+        econPhrase = `Benefits slightly exceed costs (BCR ≈ ${bcr.toFixed(2)}, net benefit ${formatNumber(netBen, 0)}).`;
+        overall = "This configuration is marginally favourable on economic grounds; design refinements could improve feasibility.";
+    } else {
+        econPhrase = `Costs meet or exceed benefits (BCR ≈ ${bcr.toFixed(2)}, net benefit ${formatNumber(netBen, 0)}).`;
+        overall = "On current assumptions this design is not economically attractive; either benefits must increase or costs fall.";
+    }
+
+    el.innerHTML = `
+        <p>${supportPhrase}</p>
+        <p>${econPhrase}</p>
+        <p>${overall}</p>
+    `;
+}
+
+// Lives-saved equivalent interpretation text
+function updateMRSInterpretation(config, livesEq) {
+    const box = document.getElementById("mrs-text");
+    const interp = document.getElementById("results-interpretation");
+    const {country, scenario} = config;
+    const labelScenario = scenario === "mild" ? "mild outbreak" : "severe outbreak";
+
+    const sign = livesEq > 0 ? "reduces" : "increases";
+    const livesAbs = Math.abs(livesEq);
+
+    box.innerHTML = `
+        <p>
+            Relative to a benchmark mandate that is targeted to high-risk occupations, allows medical-only
+            exemptions and lifts at 50% coverage, your chosen design is valued as equivalent to a
+            <strong>${sign}</strong> in expected lives saved of about
+            <strong>${formatNumber(livesAbs, 1)} per 100,000 people</strong> in ${country}
+            under a ${labelScenario} scenario.
+        </p>
+        <p>
+            A positive value means the public would, on average, require extra lives saved to accept your design;
+            a negative value means your design is preferred even if it saved slightly fewer lives.
+        </p>
+    `;
+
+    const mrs = mrsValues[country][scenario];
+
+    const scopeMsg = mrs.scopeAll > 0
+        ? "Broad, population-wide mandates are less preferred than targeted mandates unless they deliver additional lives saved."
+        : "Under this framing, broad mandates become more attractive and can be preferred even without extra lives saved.";
+
+    const exMsg = "Broader exemptions (especially personal-belief exemptions) are consistently seen as costly in lives-saved equivalent terms, reflecting a preference for stricter, more focused exemption rules.";
+
+    const covMsg = "Higher coverage thresholds before lifting mandates (70% and especially 90%) are valued positively, indicating support for keeping mandates in place until high population coverage is reached.";
+
+    interp.innerHTML = `
+        <p>
+            In <strong>${country}</strong> under a <strong>${labelScenario}</strong> scenario, moving from
+            high-risk-only scope to a mandate covering all occupations and public spaces corresponds to a
+            lives-saved equivalent of about
+            <strong>${formatNumber(mrs.scopeAll, 2)} lives per 100,000</strong>.
+        </p>
+        <p>
+            Allowing medical + religious exemptions is equivalent to about
+            <strong>${formatNumber(mrs.exMedRel, 2)} lives per 100,000</strong>, and allowing medical,
+            religious and personal-belief exemptions corresponds to roughly
+            <strong>${formatNumber(mrs.exMedRelPers, 2)} lives per 100,000</strong>.
+            Moving the lifting threshold from 50% to 70% or 90% coverage has lives-saved equivalents of around
+            <strong>${formatNumber(mrs.cov70, 2)}</strong> and <strong>${formatNumber(mrs.cov90, 2)}</strong>
+            lives per 100,000 respectively.
+        </p>
+        <p>${scopeMsg}</p>
+        <p>${exMsg}</p>
+        <p>${covMsg}</p>
+    `;
+}
+
+// Briefing text for emails / reports
+function updateBriefingText(config) {
+    const textarea = document.getElementById("results-briefing-text");
+
+    const supportText = isFinite(config.supportPercent)
+        ? `${config.supportPercent.toFixed(1)}%`
+        : "not available";
+
+    const econPart = isFinite(config.bcr)
+        ? `Monetary benefits are estimated at ${formatNumber(config.monetaryBenefit, 0)}, compared with total mandate costs of ${formatNumber(config.totalCost, 0)}, yielding a net benefit of ${formatNumber(config.netBenefit, 0)} and a benefit–cost ratio (BCR) of ${config.bcr.toFixed(2)}.`
+        : `Economic benefits and costs cannot yet be fully quantified because some cost inputs are missing or zero.`;
+
+    const txt = `
+Over a ${config.periodYears}-year evaluation period, we assessed a vaccine mandate in ${config.country} under a ${config.scenarioLabel.toLowerCase()} scenario. The mandate is ${config.scope === "all" ? "broad, covering all occupations and public spaces" : "targeted to high-risk occupations"}, allows ${config.exemptions === "medical" ? "medical-only exemptions" : config.exemptions === "medRel" ? "medical and religious exemptions" : "medical, religious and personal-belief exemptions"}, and is lifted once ${config.coverage}% of the population is vaccinated.
+
+Under the current assumptions, the mandate is expected to save around ${formatNumber(config.totalLivesSaved, 0)} lives in the exposed population (corresponding to ${formatNumber(config.livesPer100k, 1)} lives saved per 100,000 people). Using a value per life saved of ${formatNumber(config.vsl, 0)}, this translates into substantial aggregate health benefits.
+
+Model-based estimates from the MandEval discrete choice experiment suggest that approximately ${supportText} of respondents would support this mandate over a “no mandate” option in the selected outbreak context. ${econPart}
+
+Taken together, these results indicate that the proposed mandate design offers ${config.bcr >= 1 && config.netBenefit > 0 ? "a favourable" : "a mixed"} balance between effectiveness, public acceptability and economic value. Decision-makers can adjust the scope, exemption rules or lifting threshold within the tool to explore alternative designs and their implications for public support, lives saved and value for money.
+    `.trim();
+
+    textarea.value = txt;
+}
+
+// --- Saved scenarios --------------------------------------------------------
+
+function addScenarioToTable() {
+    const tbody = document.getElementById("savedScenariosTableBody");
+    tbody.innerHTML = "";
+    state.savedScenarios.forEach((sc, index) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>
+                <input type="radio" name="selectedScenario" value="${index}">
+            </td>
+            <td>${sc.name}</td>
+            <td>${sc.country}</td>
+            <td>${sc.scenarioLabel}</td>
+            <td>${sc.scope === "all" ? "All occupations & public spaces" : "High-risk only"}</td>
+            <td>${
+                sc.exemptions === "medical"
+                    ? "Medical only"
+                    : sc.exemptions === "medRel"
+                        ? "Medical + religious"
+                        : "Medical + religious + personal"
+            }</td>
+            <td>${sc.coverage}%</td>
+            <td>${formatNumber(sc.livesPer100k, 1)}</td>
+            <td>${isFinite(sc.supportPercent) ? sc.supportPercent.toFixed(1) : "–"}</td>
+            <td>${isFinite(sc.bcr) ? sc.bcr.toFixed(2) : "–"}</td>
+        `;
+        tbody.appendChild(tr);
     });
+}
 
-    $$('.btn-remove-scenario').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = Number(btn.getAttribute('data-id'));
-        state.scenarios = state.scenarios.filter(s => s.id !== id);
-        persistScenarios();
-        rebuildScenariosTable();
-        rebuildResultsTable();
-        showToast('Scenario removed.', 'success');
-      });
+function getSelectedScenario() {
+    const radios = document.querySelectorAll('input[name="selectedScenario"]');
+    let idx = null;
+    radios.forEach(r => {
+        if (r.checked) idx = parseInt(r.value, 10);
     });
-  }
+    if (idx === null || idx < 0 || idx >= state.savedScenarios.length) return null;
+    return state.savedScenarios[idx];
+}
 
-  function rebuildResultsTable(){
-    const tbody = $('#results-table tbody');
-    if (!tbody) return;
-    tbody.innerHTML = '';
+// --- Exports & AI prompt ----------------------------------------------------
 
-    if (!state.scenarios.length){
-      const tr = document.createElement('tr');
-      tr.className = 'empty-row';
-      tr.innerHTML = '<td colspan="10">No saved scenarios yet. Configure a mandate and click <strong>Save scenario</strong>.</td>';
-      tbody.appendChild(tr);
-      return;
+function generateScenarioSummary(sc) {
+    const supportText = isFinite(sc.supportPercent)
+        ? sc.supportPercent.toFixed(1) + "%"
+        : "not available";
+
+    const econPart = isFinite(sc.bcr)
+        ? `Benefit–cost ratio (BCR): ${sc.bcr.toFixed(2)}; net benefit: ${formatNumber(sc.netBenefit, 0)}.`
+        : `BCR and net benefit not available – some cost inputs are zero or missing.`;
+
+    return `
+Scenario name: ${sc.name}
+Country: ${sc.country}
+Outbreak scenario: ${sc.scenarioLabel}
+Mandate scope: ${sc.scope === "all" ? "All occupations and public spaces" : "High-risk occupations only"}
+Exemptions: ${
+        sc.exemptions === "medical"
+            ? "Medical only"
+            : sc.exemptions === "medRel"
+                ? "Medical + religious"
+                : "Medical + religious + personal-belief"
     }
+Coverage threshold to lift mandate: ${sc.coverage}% vaccinated
+Expected lives saved per 100,000 people: ${sc.livesPer100k.toFixed(1)}
+Population exposed: ${formatNumber(sc.population, 0)}
+Evaluation period: ${sc.periodYears} year(s)
+Total lives saved over period: ${formatNumber(sc.totalLivesSaved, 0)}
+Value per life saved (VSL basis): ${formatNumber(sc.vsl, 0)}
+Total monetary benefit: ${formatNumber(sc.monetaryBenefit, 0)}
+Total mandate-related cost: ${formatNumber(sc.totalCost, 0)}
+Model-based public support (MandEval mixed logit): ${supportText}
+${econPart}
+    `.trim();
+}
 
-    const ranked = state.scenarios.slice().sort((a, b) => {
-      const bcrA = a.bcr != null ? a.bcr : -Infinity;
-      const bcrB = b.bcr != null ? b.bcr : -Infinity;
-      if (bcrB !== bcrA) return bcrB - bcrA;
-      const supA = !isNaN(a.support) ? a.support : -Infinity;
-      const supB = !isNaN(b.support) ? b.support : -Infinity;
-      return supB - supA;
-    });
+function exportScenarioAsPlainPdf(sc, brief = false) {
+    // Basic export using jsPDF if available; fallback to a text download
+    const summary = generateScenarioSummary(sc);
+    if (typeof window.jspdf !== "undefined" || typeof window.jsPDF !== "undefined") {
+        const {jsPDF} = window.jspdf || window;
+        const doc = new jsPDF();
+        const marginLeft = 14;
+        const marginTop = 16;
+        const maxWidth = 180;
+        let y = marginTop;
 
-    ranked.forEach((s, idx) => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${idx + 1}</td>
-        <td>${escapeHtml(s.label)}</td>
-        <td>${escapeHtml(countryLabel(s.country))}</td>
-        <td>${escapeHtml(outbreakLabel(s.outbreak))}</td>
-        <td>${escapeHtml(scopeLabel(s.scope))}</td>
-        <td>${escapeHtml(exemptionsLabel(s.exemptions))}</td>
-        <td>${escapeHtml(coverageLabel(s.coverage))}</td>
-        <td>${s.bcr != null ? s.bcr.toFixed(2) : '–'}</td>
-        <td>${formatMoney(s.netBenefit)} ${escapeHtml(state.settings.currencyLabel)}</td>
-        <td>${!isNaN(s.support) ? formatPercent(s.support * 100) : '–'}</td>
-      `;
-      tbody.appendChild(tr);
-    });
-  }
+        const title = brief ? "MandEval – Brief Scenario Summary" : "MandEval – Scenario Summary";
+        doc.setFontSize(14);
+        doc.text(title, marginLeft, y);
+        y += 8;
 
-  function updateBriefingText(){
-    const area = $('#briefing-text');
-    if (!area) return;
-
-    if (!state.config){
-      area.value = 'Configure a mandate scenario and apply costs to generate briefing text.';
-      return;
-    }
-
-    const cfg = state.config;
-    const settings = state.settings;
-    const derived = computeDerived();
-
-    const currency = settings.currencyLabel || 'local currency units';
-    const horizon = settings.horizon || '1 year';
-
-    const parts = [];
-
-    parts.push(
-      `Context: ${countryLabel(cfg.country)} under a ${outbreakLabel(cfg.outbreak).toLowerCase()} scenario ` +
-      `over a ${horizon} horizon.`
-    );
-    parts.push(
-      `Mandate design: scope is ${scopeLabel(cfg.scope).toLowerCase()}, with ${exemptionsLabel(cfg.exemptions).toLowerCase()} ` +
-      `exemptions and the mandate lifted once ${coverageLabel(cfg.coverage)} is reached.`
-    );
-    parts.push(
-      `Epidemiological impact: the mandate is assumed to save about ${cfg.livesPer100k.toFixed(1)} lives per 100,000 people, ` +
-      `which translates to approximately ${derived ? derived.livesTotal.toFixed(1) : '–'} lives saved in the population ` +
-      `covered (${cfg.popMillions.toFixed(1)} million people).`
-    );
-
-    if (derived){
-      parts.push(
-        `Cost–benefit: under current settings, total implementation cost is estimated at ` +
-        `${formatMoney(state.costs ? state.costs.total : 0)} ${currency}. The monetary value of lives saved is ` +
-        `${formatMoney(derived.totalBenefit)} ${currency}, giving a benefit–cost ratio of ` +
-        `${derived.bcr != null && isFinite(derived.bcr) ? derived.bcr.toFixed(2) : 'not yet defined'}.`
-      );
-      if (!isNaN(derived.support)){
-        parts.push(
-          `Public support: based on the mixed logit estimates, the predicted probability that members of the public ` +
-          `choose a mandate like this over no mandate is about ${formatPercent(derived.support * 100)}.`
-        );
-      }
-    }
-
-    if (state.scenarios.length){
-      const ranked = state.scenarios.slice().sort((a, b) => {
-        const bcrA = a.bcr != null ? a.bcr : -Infinity;
-        const bcrB = b.bcr != null ? b.bcr : -Infinity;
-        if (bcrB !== bcrA) return bcrB - bcrA;
-        const supA = !isNaN(a.support) ? a.support : -Infinity;
-        const supB = !isNaN(b.support) ? b.support : -Infinity;
-        return supB - supA;
-      }).slice(0, 3);
-
-      if (ranked.length){
-        parts.push('Top candidate mandate options (by benefit–cost ratio and support):');
-        ranked.forEach((s, idx) => {
-          parts.push(
-            `${idx + 1}. ${countryLabel(s.country)}, ${outbreakLabel(s.outbreak).toLowerCase()}, ` +
-            `${scopeLabel(s.scope).toLowerCase()}, ${exemptionsLabel(s.exemptions).toLowerCase()}, ` +
-            `${coverageLabel(s.coverage)}, BCR ${s.bcr != null ? s.bcr.toFixed(2) : '–'}, ` +
-            `predicted support ${!isNaN(s.support) ? formatPercent(s.support * 100) : '–'}.`
-          );
+        doc.setFontSize(10);
+        const lines = doc.splitTextToSize(summary, maxWidth);
+        lines.forEach(line => {
+            if (y > 280) {
+                doc.addPage();
+                y = marginTop;
+            }
+            doc.text(line, marginLeft, y);
+            y += 5;
         });
-      }
-    }
 
-    area.value = parts.join('\n\n');
-  }
+        if (brief) {
+            // Page 2: enablers and risks
+            doc.addPage();
+            y = marginTop;
+            doc.setFontSize(12);
+            doc.text("Enablers and risks (for discussion)", marginLeft, y);
+            y += 8;
+            doc.setFontSize(10);
 
-  function buildAiPrompt(){
-    const settings = state.settings;
-    const cfg = state.config;
-    const derived = computeDerived();
+            const enablers = [];
+            if (isFinite(sc.supportPercent) && sc.supportPercent >= 60) {
+                enablers.push("Relatively high predicted public support in this context.");
+            } else {
+                enablers.push("Mandate design can be communicated as evidence-based and proportionate.");
+            }
+            if (isFinite(sc.bcr) && sc.bcr >= 1) {
+                enablers.push("Economic benefits are at least as large as costs.");
+            }
+            enablers.push("Design features can be adjusted (scope, exemptions, lifting threshold) to respond to stakeholder feedback.");
 
-    const lines = [];
-    lines.push('You are assisting a public health policy team that is evaluating COVID-19 vaccine mandates.');
-    lines.push('');
-    if (cfg){
-      lines.push('CURRENT MANDATE CONFIGURATION');
-      lines.push(`- Country: ${countryLabel(cfg.country)}`);
-      lines.push(`- Outbreak scenario: ${outbreakLabel(cfg.outbreak)}`);
-      lines.push(`- Scope: ${scopeLabel(cfg.scope)}`);
-      lines.push(`- Exemption policy: ${exemptionsLabel(cfg.exemptions)}`);
-      lines.push(`- Coverage threshold to lift mandate: ${coverageLabel(cfg.coverage)}`);
-      lines.push(`- Population covered: ${cfg.popMillions.toFixed(1)} million people`);
-      lines.push(`- Expected lives saved: ${cfg.livesPer100k.toFixed(1)} per 100,000 people`);
-    }
-    lines.push('');
-    lines.push('SETTINGS');
-    lines.push(`- Analysis horizon: ${settings.horizon}`);
-    lines.push(`- Currency label: ${settings.currencyLabel}`);
-    lines.push(`- Measure for value per life saved: ${settings.vslScheme}`);
-    lines.push(`- Value per life saved: ${settings.vslValue}`);
-    lines.push('');
-    if (derived){
-      lines.push('COST–BENEFIT SUMMARY FOR CURRENT CONFIGURATION');
-      lines.push(`- Total implementation cost: ${formatMoney(state.costs ? state.costs.total : 0)} ${settings.currencyLabel}`);
-      lines.push(`- Estimated total lives saved: ${derived.livesTotal.toFixed(1)}`);
-      lines.push(`- Monetary benefit of lives saved: ${formatMoney(derived.totalBenefit)} ${settings.currencyLabel}`);
-      lines.push(`- Benefit–cost ratio (BCR): ${derived.bcr != null && isFinite(derived.bcr) ? derived.bcr.toFixed(2) : 'not yet defined'}`);
-      if (!isNaN(derived.support)){
-        lines.push(`- Predicted public support: ${formatPercent(derived.support * 100)}`);
-      }
-    }
-    if (state.scenarios.length){
-      lines.push('');
-      lines.push('TOP SAVED SCENARIOS (ranked by BCR and support):');
-      const ranked = state.scenarios.slice().sort((a, b) => {
-        const bcrA = a.bcr != null ? a.bcr : -Infinity;
-        const bcrB = b.bcr != null ? b.bcr : -Infinity;
-        if (bcrB !== bcrA) return bcrB - bcrA;
-        const supA = !isNaN(a.support) ? a.support : -Infinity;
-        const supB = !isNaN(b.support) ? b.support : -Infinity;
-        return supB - supA;
-      }).slice(0, 5);
-      ranked.forEach((s, idx) => {
-        lines.push(
-          `${idx + 1}. ${countryLabel(s.country)}, ${outbreakLabel(s.outbreak)}, ` +
-          `${scopeLabel(s.scope)}, ${exemptionsLabel(s.exemptions)}, ${coverageLabel(s.coverage)}, ` +
-          `BCR ${s.bcr != null ? s.bcr.toFixed(2) : '–'}, support ${!isNaN(s.support) ? formatPercent(s.support * 100) : '–'}.`
-        );
-      });
-    }
-    lines.push('');
-    lines.push('TASK FOR YOU:');
-    lines.push('Provide a short, clear briefing note for senior decision-makers that explains:');
-    lines.push('- the mandate design and assumptions;');
-    lines.push('- the expected epidemiological impact (lives saved);');
-    lines.push('- the cost–benefit profile (including BCR);');
-    lines.push('- the predicted level of public support; and');
-    lines.push('- which scenario or scenarios appear most suitable, and why, with any important caveats.');
+            const risks = [];
+            if (isFinite(sc.supportPercent) && sc.supportPercent < 50) {
+                risks.push("Limited predicted public support; risk of political or social resistance.");
+            }
+            if (isFinite(sc.bcr) && sc.bcr < 1) {
+                risks.push("On current assumptions, the mandate may not be cost-effective.");
+            }
+            risks.push("Implementation capacity (verification, enforcement, communication) may constrain scaling.");
 
-    return lines.join('\n');
-  }
-
-  function copyTextToClipboard(text){
-    if (!navigator.clipboard){
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.left = '-9999px';
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      try {
-        document.execCommand('copy');
-      } catch(e){
-        // ignore
-      }
-      document.body.removeChild(ta);
-      return;
-    }
-    navigator.clipboard.writeText(text).catch(() => {
-      // ignore
-    });
-  }
-
-  function exportScenariosExcel(){
-    if (!state.scenarios.length){
-      showToast('No scenarios to export.', 'warning');
-      return;
-    }
-    if (typeof XLSX === 'undefined'){
-      showToast('Excel export library is not available in this browser.', 'error');
-      return;
-    }
-
-    const rows = state.scenarios.map((s, idx) => ({
-      Rank: idx + 1,
-      Label: s.label,
-      Country: countryLabel(s.country),
-      Outbreak: outbreakLabel(s.outbreak),
-      Scope: scopeLabel(s.scope),
-      Exemptions: exemptionsLabel(s.exemptions),
-      Coverage: coverageLabel(s.coverage),
-      PopulationMillions: s.popMillions,
-      LivesPer100k: s.livesPer100k,
-      LivesTotal: s.livesTotal,
-      TotalCost: s.totalCost,
-      TotalBenefit: s.totalBenefit,
-      NetBenefit: s.netBenefit,
-      BCR: s.bcr,
-      PredictedSupport: s.support
-    }));
-
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows);
-    XLSX.utils.book_append_sheet(wb, ws, 'Scenarios');
-    XLSX.writeFile(wb, 'mandeval_scenarios.xlsx');
-    showToast('Excel file downloaded.', 'success');
-  }
-
-  function exportScenariosCsv(){
-    if (!state.scenarios.length){
-      showToast('No scenarios to export.', 'warning');
-      return;
-    }
-    const header = [
-      'Rank','Label','Country','Outbreak','Scope','Exemptions','Coverage',
-      'PopulationMillions','LivesPer100k','LivesTotal',
-      'TotalCost','TotalBenefit','NetBenefit','BCR','PredictedSupport'
-    ];
-    const lines = [header.join(',')];
-    const ranked = state.scenarios.slice().sort((a, b) => {
-      const bcrA = a.bcr != null ? a.bcr : -Infinity;
-      const bcrB = b.bcr != null ? b.bcr : -Infinity;
-      if (bcrB !== bcrA) return bcrB - bcrA;
-      const supA = !isNaN(a.support) ? a.support : -Infinity;
-      const supB = !isNaN(b.support) ? b.support : -Infinity;
-      return supB - supA;
-    });
-    ranked.forEach((s, idx) => {
-      const row = [
-        idx + 1,
-        '"' + s.label.replace(/"/g, '""') + '"',
-        '"' + countryLabel(s.country) + '"',
-        '"' + outbreakLabel(s.outbreak) + '"',
-        '"' + scopeLabel(s.scope) + '"',
-        '"' + exemptionsLabel(s.exemptions) + '"',
-        '"' + coverageLabel(s.coverage) + '"',
-        s.popMillions,
-        s.livesPer100k,
-        s.livesTotal,
-        s.totalCost,
-        s.totalBenefit,
-        s.netBenefit,
-        s.bcr != null ? s.bcr.toFixed(4) : '',
-        !isNaN(s.support) ? (s.support * 100).toFixed(2) : ''
-      ];
-      lines.push(row.join(','));
-    });
-
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'mandeval_scenarios.csv';
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    showToast('CSV file downloaded.', 'success');
-  }
-
-  function exportSummaryPdf(){
-    if (!state.scenarios.length){
-      showToast('No scenarios to export.', 'warning');
-      return;
-    }
-    if (typeof window.jspdf === 'undefined' && typeof window.jsPDF === 'undefined'){
-      showToast('PDF export library is not available in this browser.', 'error');
-      return;
-    }
-    const jsPDF = window.jspdf ? window.jspdf.jsPDF : window.jsPDF;
-    const doc = new jsPDF();
-
-    const settings = state.settings;
-
-    doc.setFontSize(14);
-    doc.text('MANDEVAL – Vaccine mandate scenarios', 14, 18);
-    doc.setFontSize(11);
-    doc.text('Summary of saved scenarios (top ranked first)', 14, 26);
-
-    const ranked = state.scenarios.slice().sort((a, b) => {
-      const bcrA = a.bcr != null ? a.bcr : -Infinity;
-      const bcrB = b.bcr != null ? b.bcr : -Infinity;
-      if (bcrB !== bcrA) return bcrB - bcrA;
-      const supA = !isNaN(a.support) ? a.support : -Infinity;
-      const supB = !isNaN(b.support) ? b.support : -Infinity;
-      return supB - supA;
-    }).slice(0, 10);
-
-    let y = 34;
-    doc.setFontSize(10);
-    ranked.forEach((s, idx) => {
-      const line1 =
-        `${idx + 1}. ${countryLabel(s.country)}, ${outbreakLabel(s.outbreak)}, ` +
-        `${scopeLabel(s.scope)}, ${exemptionsLabel(s.exemptions)}, ${coverageLabel(s.coverage)}.`;
-      const line2 =
-        `   BCR ${s.bcr != null ? s.bcr.toFixed(2) : '–'}, net benefit ${formatMoney(s.netBenefit)} ${settings.currencyLabel}, ` +
-        `predicted support ${!isNaN(s.support) ? formatPercent(s.support * 100) : '–'}.`;
-
-      doc.text(line1, 14, y);
-      y += 5;
-      doc.text(line2, 14, y);
-      y += 6;
-      if (y > 270){
-        doc.addPage();
-        y = 20;
-      }
-    });
-
-    doc.save('mandeval_summary.pdf');
-    showToast('PDF summary downloaded.', 'success');
-  }
-
-  function exportBriefingWord(){
-    const briefing = $('#briefing-text') ? $('#briefing-text').value : '';
-    if (!briefing || !briefing.trim()){
-      showToast('No briefing text available to export.', 'warning');
-      return;
-    }
-    const html =
-      '<html><head><meta charset="UTF-8"><title>MANDEVAL briefing</title></head><body>' +
-      '<h1>MANDEVAL – Vaccine mandate briefing</h1>' +
-      '<pre style="font-family:Segoe UI,system-ui,-apple-system,sans-serif;font-size:11pt;white-space:pre-wrap;">' +
-      escapeHtml(briefing) +
-      '</pre></body></html>';
-
-    const blob = new Blob([html], { type: 'application/msword' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'mandeval_briefing.doc';
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    showToast('Word briefing downloaded.', 'success');
-  }
-
-  function clearStorage(){
-    try {
-      localStorage.removeItem(STORAGE_SCENARIOS);
-    } catch(e){
-      // ignore
-    }
-    state.scenarios = [];
-    rebuildScenariosTable();
-    rebuildResultsTable();
-    showToast('Saved scenarios cleared from this browser.', 'success');
-  }
-
-  function initTabs(){
-    const links = $$('.tab-link');
-    const panels = $$('.tab-panel');
-    links.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const tabId = btn.getAttribute('data-tab');
-        links.forEach(b => b.classList.toggle('active', b === btn));
-        panels.forEach(p => p.classList.toggle('active', p.id === tabId));
-      });
-    });
-  }
-
-  function initRangeDisplay(){
-    const range = $('#cfg-lives');
-    const span = $('#cfg-lives-display');
-    if (!range || !span) return;
-    const update = () => {
-      span.textContent = Number(range.value || 0).toFixed(0);
-    };
-    range.addEventListener('input', update);
-    update();
-  }
-
-  function updateDerivedAndUI(){
-    updateConfigSummary();
-    updateCostSummary();
-    updateResultsSummary();
-    updateMRSSection();
-    updateBriefingText();
-  }
-
-  function init(){
-    initTabs();
-    initRangeDisplay();
-
-    loadSettings();
-    syncSettingsForm();
-    loadScenarios();
-    rebuildScenariosTable();
-    rebuildResultsTable();
-    updateDerivedAndUI();
-
-    const btnSettings = $('#btn-save-settings');
-    if (btnSettings){
-      btnSettings.addEventListener('click', saveSettingsToState);
-    }
-
-    const btnApplyConfig = $('#btn-apply-config');
-    if (btnApplyConfig){
-      btnApplyConfig.addEventListener('click', applyConfigFromForm);
-    }
-
-    const btnSaveScenario = $('#btn-save-scenario');
-    if (btnSaveScenario){
-      btnSaveScenario.addEventListener('click', saveScenario);
-    }
-
-    const btnApplyCosts = $('#btn-apply-costs');
-    if (btnApplyCosts){
-      btnApplyCosts.addEventListener('click', applyCostsFromForm);
-    }
-
-    const btnCopyBriefing = $('#btn-copy-briefing');
-    if (btnCopyBriefing){
-      btnCopyBriefing.addEventListener('click', () => {
-        const txt = $('#briefing-text') ? $('#briefing-text').value : '';
-        if (!txt || !txt.trim()){
-          showToast('No briefing text to copy yet.', 'warning');
-          return;
+            const bulletLines = [
+                "Enablers:",
+                ...enablers.map(e => "- " + e),
+                "",
+                "Risks:",
+                ...risks.map(r => "- " + r)
+            ];
+            bulletLines.forEach(line => {
+                if (y > 280) {
+                    doc.addPage();
+                    y = marginTop;
+                }
+                doc.text(line, marginLeft, y);
+                y += 5;
+            });
         }
-        copyTextToClipboard(txt);
-        showToast('Briefing text copied to clipboard.', 'success');
-      });
+
+        const fileName = brief
+            ? `MandEval_${sc.name}_brief.pdf`
+            : `MandEval_${sc.name}.pdf`;
+        doc.save(fileName);
+        showToast("PDF export generated.", "success");
+    } else {
+        // Fallback: download as .txt with a .pdf-ish name
+        const blob = new Blob([summary], {type: "text/plain"});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = brief
+            ? `MandEval_${sc.name}_brief.txt`
+            : `MandEval_${sc.name}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        showToast("Simple text export generated (PDF library not available).", "warning");
+    }
+}
+
+function exportScenarioAsWord(sc) {
+    const summary = generateScenarioSummary(sc);
+    const html = `
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="utf-8"><title>MandEval Scenario</title></head>
+<body>
+<h2>MandEval – Scenario summary</h2>
+<pre style="font-family: 'Segoe UI', sans-serif; font-size: 11pt;">${summary}</pre>
+</body>
+</html>
+    `.trim();
+
+    const blob = new Blob([html], {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `MandEval_${sc.name}.doc`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast("Word document exported.", "success");
+}
+
+function generateAiPrompt(sc) {
+    const summary = generateScenarioSummary(sc);
+    return `
+You are assisting with the interpretation of a vaccine mandate decision analysis tool (MandEval). The tool combines discrete choice experiment (DCE) evidence on public preferences with epidemiological and costing assumptions.
+
+Please read the scenario summary below and then:
+1. Explain in clear, non-technical language how the public is likely to view this mandate design (support, concerns, perceived fairness).
+2. Comment on the trade-offs between scope, exemptions, lifting threshold and expected lives saved.
+3. Comment on the economic case (benefits, costs, net benefit, BCR) and any distributional or equity issues that may arise.
+4. Suggest 3–5 practical messaging points or design refinements that could improve both acceptability and value for money.
+
+Scenario summary:
+${summary}
+    `.trim();
+}
+
+// --- Event handlers ---------------------------------------------------------
+
+function handleApplyConfiguration() {
+    const country = document.getElementById("config-country").value;
+    const scenarioValue = document.getElementById("config-outbreak").value;
+    const scenarioLabel = scenarioValue === "mild" ? "Mild outbreak" : "Severe outbreak";
+    const scope = getSelectedScope();
+    const exemptions = document.getElementById("config-exemptions").value;
+    const coverage = parseInt(document.getElementById("config-coverage").value, 10);
+    const livesPer100k = parseFloat(document.getElementById("config-lives").value) || 0;
+
+    const periodYears = parseInt(document.getElementById("settings-period").value, 10) || 1;
+    const population = parseFloat(document.getElementById("settings-population").value) || 0;
+    const vslBasis = document.getElementById("settings-vsl-basis").value;
+    const vsl = parseFloat(document.getElementById("settings-vsl-value").value) || 0;
+
+    const costSetupPerMillion = parseFloat(document.getElementById("cost-setup-per-million").value) || 0;
+    const costAdminPerPersonPerYear = parseFloat(document.getElementById("cost-admin-per-person-per-year").value) || 0;
+    const costEnforcePerPersonPerYear = parseFloat(document.getElementById("cost-enforce-per-person-per-year").value) || 0;
+    const costCommsPerPerson = parseFloat(document.getElementById("cost-comms-per-person").value) || 0;
+    const costOtherPerPerson = parseFloat(document.getElementById("cost-other-per-person").value) || 0;
+
+    const support = computePredictedSupport(country, scenarioValue, scope, exemptions, coverage, livesPer100k);
+    const supportPercent = support != null ? support * 100 : NaN;
+
+    const econ = computeEconomics({
+        periodYears,
+        population,
+        livesPer100k,
+        vsl,
+        costSetupPerMillion,
+        costAdminPerPersonPerYear,
+        costEnforcePerPersonPerYear,
+        costCommsPerPerson,
+        costOtherPerPerson
+    });
+
+    const config = {
+        name: `${country}-${scenarioLabel}-${Date.now()}`,
+        country,
+        scenario: scenarioValue,
+        scenarioLabel,
+        scope,
+        exemptions,
+        coverage,
+        livesPer100k,
+        periodYears,
+        population,
+        vsl,
+        supportPercent,
+        totalLivesSaved: econ.totalLivesSaved,
+        monetaryBenefit: econ.monetaryBenefit,
+        totalCost: econ.totalCost,
+        netBenefit: econ.netBenefit,
+        bcr: econ.bcr,
+        costSetupPerMillion,
+        costAdminPerPersonPerYear,
+        costEnforcePerPersonPerYear,
+        costCommsPerPerson,
+        costOtherPerPerson
+    };
+
+    state.currentConfig = config;
+
+    updateConfigSummary(config);
+    updateHeadlineRecommendation(config);
+
+    // KPI cards
+    document.getElementById("kpi-lives-per-100k").textContent = formatNumber(livesPer100k, 1);
+    document.getElementById("kpi-total-lives").textContent = formatNumber(econ.totalLivesSaved, 0);
+    document.getElementById("kpi-support").textContent = isFinite(supportPercent)
+        ? supportPercent.toFixed(1) + "%"
+        : "–";
+    document.getElementById("kpi-benefit").textContent = formatNumber(econ.monetaryBenefit, 0);
+    document.getElementById("kpi-cost").textContent = formatNumber(econ.totalCost, 0);
+    document.getElementById("kpi-net-bcr").textContent = isFinite(econ.bcr)
+        ? `${formatNumber(econ.netBenefit, 0)} (BCR ${econ.bcr.toFixed(2)})`
+        : "–";
+
+    // Charts
+    renderSupportChart(config);
+    renderBenefitCostChart({
+        monetaryBenefit: econ.monetaryBenefit,
+        totalCost: econ.totalCost
+    });
+
+    // Config-level MRS and attribute-level MRS
+    const livesEq = computeConfigMRS(config);
+    updateMRSInterpretation(config, livesEq);
+    renderMRSChart(config);
+
+    // Briefing text
+    updateBriefingText(config);
+
+    showToast("Configuration applied.", "success");
+}
+
+function handleSaveScenario() {
+    if (!state.currentConfig) {
+        showToast("Please apply a configuration before saving a scenario.", "warning");
+        return;
     }
 
-    const btnCopilot = $('#btn-open-copilot');
-    if (btnCopilot){
-      btnCopilot.addEventListener('click', () => {
-        const prompt = buildAiPrompt();
-        copyTextToClipboard(prompt);
-        window.open('https://copilot.microsoft.com/', '_blank', 'noopener');
-        showToast('Prompt copied. Copilot opened in a new window.', 'success');
-      });
+    const cfg = state.currentConfig;
+
+    // Simple, readable name
+    const name = `${cfg.country} – ${cfg.scenarioLabel} – ${cfg.scope === "all" ? "Population-wide" : "High-risk"} – ${cfg.coverage}%`;
+
+    const scenario = {
+        ...cfg,
+        name
+    };
+
+    state.savedScenarios.push(scenario);
+    addScenarioToTable();
+    showToast("Scenario saved.", "success");
+}
+
+function handleCopyBriefing() {
+    const text = document.getElementById("results-briefing-text").value || "";
+    if (!navigator.clipboard) {
+        showToast("Clipboard not available in this browser.", "warning");
+        return;
     }
+    navigator.clipboard.writeText(text)
+        .then(() => showToast("Briefing text copied.", "success"))
+        .catch(() => showToast("Unable to copy briefing text.", "error"));
+}
 
-    const btnChatGPT = $('#btn-open-chatgpt');
-    if (btnChatGPT){
-      btnChatGPT.addEventListener('click', () => {
-        const prompt = buildAiPrompt();
-        copyTextToClipboard(prompt);
-        window.open('https://chat.openai.com/', '_blank', 'noopener');
-        showToast('Prompt copied. ChatGPT opened in a new window.', 'success');
-      });
+function handleExportStandardPdf() {
+    const sc = getSelectedScenario();
+    if (!sc) {
+        showToast("Please select a scenario first.", "warning");
+        return;
     }
+    exportScenarioAsPlainPdf(sc, false);
+}
 
-    const btnExportExcel = $('#btn-export-excel');
-    if (btnExportExcel){
-      btnExportExcel.addEventListener('click', exportScenariosExcel);
+function handleExportBriefPdf() {
+    const sc = getSelectedScenario();
+    if (!sc) {
+        showToast("Please select a scenario first.", "warning");
+        return;
     }
+    exportScenarioAsPlainPdf(sc, true);
+}
 
-    const btnExportCsv = $('#btn-export-csv');
-    if (btnExportCsv){
-      btnExportCsv.addEventListener('click', exportScenariosCsv);
+function handleExportWord() {
+    const sc = getSelectedScenario();
+    if (!sc) {
+        showToast("Please select a scenario first.", "warning");
+        return;
     }
+    exportScenarioAsWord(sc);
+}
 
-    const btnExportPdf = $('#btn-export-pdf');
-    if (btnExportPdf){
-      btnExportPdf.addEventListener('click', exportSummaryPdf);
+function handleCopyAiPrompt() {
+    const sc = getSelectedScenario() || state.currentConfig;
+    if (!sc) {
+        showToast("Apply a configuration or select a saved scenario first.", "warning");
+        return;
     }
-
-    const btnExportWord = $('#btn-export-word');
-    if (btnExportWord){
-      btnExportWord.addEventListener('click', exportBriefingWord);
+    const prompt = generateAiPrompt(sc);
+    if (!navigator.clipboard) {
+        showToast("Clipboard not available in this browser.", "warning");
+        return;
     }
+    navigator.clipboard.writeText(prompt)
+        .then(() => showToast("AI interpretation prompt copied.", "success"))
+        .catch(() => showToast("Unable to copy AI prompt.", "error"));
+}
 
-    const btnClearStorage = $('#btn-clear-storage');
-    if (btnClearStorage){
-      btnClearStorage.addEventListener('click', clearStorage);
-    }
-  }
+function handleOpenCopilot() {
+    window.open("https://copilot.microsoft.com/", "_blank");
+}
 
-  if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
+function handleOpenChatgpt() {
+    window.open("https://chat.openai.com/", "_blank");
+}
 
-})();
+// Lives-slider two-way binding
+function setupLivesSliderBinding() {
+    const slider = document.getElementById("config-lives");
+    const input = document.getElementById("config-lives-input");
+
+    slider.addEventListener("input", () => {
+        input.value = slider.value;
+    });
+
+    input.addEventListener("input", () => {
+        let val = parseFloat(input.value);
+        if (isNaN(val)) val = 0;
+        if (val < parseFloat(slider.min)) val = parseFloat(slider.min);
+        if (val > parseFloat(slider.max)) val = parseFloat(slider.max);
+        slider.value = val;
+    });
+}
+
+// Default scenarios – one per country, severe outbreak, population-wide, medical-only, 90% coverage
+function seedDefaultScenarios() {
+    const countries = ["Australia", "France", "Italy"];
+    countries.forEach(country => {
+        const scenarioValue = "severe";
+        const scenarioLabel = "Severe outbreak";
+        const scope = "all";
+        const exemptions = "medical";
+        const coverage = 90;
+        const livesPer100k = 40; // top of DCE range
+        const periodYears = parseInt(document.getElementById("settings-period").value, 10) || 3;
+        const population = 1000000;
+
+        // Temporarily set country to pick VSL and costs
+        applyDefaultVslAndCosts(country);
+        const vsl = parseFloat(document.getElementById("settings-vsl-value").value) || 0;
+
+        const costSetupPerMillion = parseFloat(document.getElementById("cost-setup-per-million").value) || 0;
+        const costAdminPerPersonPerYear = parseFloat(document.getElementById("cost-admin-per-person-per-year").value) || 0;
+        const costEnforcePerPersonPerYear = parseFloat(document.getElementById("cost-enforce-per-person-per-year").value) || 0;
+        const costCommsPerPerson = parseFloat(document.getElementById("cost-comms-per-person").value) || 0;
+        const costOtherPerPerson = parseFloat(document.getElementById("cost-other-per-person").value) || 0;
+
+        const support = computePredictedSupport(country, scenarioValue, scope, exemptions, coverage, livesPer100k);
+        const supportPercent = support != null ? support * 100 : NaN;
+
+        const econ = computeEconomics({
+            periodYears,
+            population,
+            livesPer100k,
+            vsl,
+            costSetupPerMillion,
+            costAdminPerPersonPerYear,
+            costEnforcePerPersonPerYear,
+            costCommsPerPerson,
+            costOtherPerPerson
+        });
+
+        const sc = {
+            name: `${country} – Severe – Population-wide – 90%`,
+            country,
+            scenario: scenarioValue,
+            scenarioLabel,
+            scope,
+            exemptions,
+            coverage,
+            livesPer100k,
+            periodYears,
+            population,
+            vsl,
+            supportPercent,
+            totalLivesSaved: econ.totalLivesSaved,
+            monetaryBenefit: econ.monetaryBenefit,
+            totalCost: econ.totalCost,
+            netBenefit: econ.netBenefit,
+            bcr: econ.bcr,
+            costSetupPerMillion,
+            costAdminPerPersonPerYear,
+            costEnforcePerPersonPerYear,
+            costCommsPerPerson,
+            costOtherPerPerson
+        };
+
+        state.savedScenarios.push(sc);
+    });
+
+    addScenarioToTable();
+}
+
+// --- Initialisation ---------------------------------------------------------
+
+document.addEventListener("DOMContentLoaded", () => {
+    setupTabs();
+    setupLivesSliderBinding();
+
+    // Country / settings linkage
+    const countrySelect = document.getElementById("config-country");
+    const vslBasisSelect = document.getElementById("settings-vsl-basis");
+
+    countrySelect.addEventListener("change", () => {
+        applyDefaultVslAndCosts(countrySelect.value);
+    });
+
+    vslBasisSelect.addEventListener("change", () => {
+        applyDefaultVslAndCosts(countrySelect.value);
+    });
+
+    // Initial defaults for Australia
+    applyDefaultVslAndCosts("Australia");
+
+    // Buttons
+    document.getElementById("applyConfigBtn").addEventListener("click", handleApplyConfiguration);
+    document.getElementById("saveScenarioBtn").addEventListener("click", handleSaveScenario);
+    document.getElementById("copyBriefingBtn").addEventListener("click", handleCopyBriefing);
+
+    document.getElementById("exportStandardPdfBtn").addEventListener("click", handleExportStandardPdf);
+    document.getElementById("exportBriefPdfBtn").addEventListener("click", handleExportBriefPdf);
+    document.getElementById("exportWordBtn").addEventListener("click", handleExportWord);
+
+    document.getElementById("copyAiPromptBtn").addEventListener("click", handleCopyAiPrompt);
+    document.getElementById("openCopilotBtn").addEventListener("click", handleOpenCopilot);
+    document.getElementById("openChatgptBtn").addEventListener("click", handleOpenChatgpt);
+
+    // Seed default scenarios
+    seedDefaultScenarios();
+
+    showToast("MandEval tool loaded. Configure a mandate and click Apply configuration.", "success");
+});
