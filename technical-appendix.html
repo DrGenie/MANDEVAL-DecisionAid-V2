@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>MANDEVAL technical appendix</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --bg: #0F172A;
+      --card: #FFFFFF;
+      --muted: #6B7280;
+      --accent: #2563EB;
+    }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top left, #1E293B, #020617);
+      color: #0F172A;
+    }
+    .shell {
+      max-width: 960px;
+      margin: 24px auto 40px;
+      padding: 16px;
+    }
+    .page-card {
+      background-color: var(--card);
+      border-radius: 18px;
+      padding: 20px 22px 24px;
+      box-shadow: 0 18px 45px rgba(15, 23, 42, 0.35);
+      border: 1px solid #E5E7EB;
+    }
+    h1 {
+      font-size: 26px;
+      margin: 0 0 6px;
+    }
+    h2 {
+      font-size: 20px;
+      margin: 20px 0 8px;
+      border-bottom: 2px solid #E5E7EB;
+      padding-bottom: 4px;
+    }
+    h3 {
+      font-size: 16px;
+      margin: 16px 0 6px;
+    }
+    p {
+      font-size: 14px;
+      line-height: 1.5;
+      color: #111827;
+      margin: 6px 0;
+    }
+    .label-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background-color: #EFF6FF;
+      color: #1D4ED8;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 6px;
+    }
+    .grid-two {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 18px;
+      margin-top: 10px;
+    }
+    .highlight-box {
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: #F9FAFB;
+      border: 1px solid #E5E7EB;
+      font-size: 13px;
+    }
+    .pill {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 999px;
+      background-color: #EEF2FF;
+      color: #4338CA;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 6px;
+    }
+    ul {
+      margin: 6px 0 6px 20px;
+      padding: 0;
+      font-size: 14px;
+    }
+    li {
+      margin: 3px 0;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      background-color: #F3F4F6;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    .math {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      display: inline-block;
+      background-color: #F9FAFB;
+      padding: 4px 6px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .example-box {
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: #ECFDF5;
+      border: 1px solid #BBF7D0;
+      font-size: 13px;
+      margin-top: 10px;
+    }
+    .example-tag {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #15803D;
+      margin-bottom: 2px;
+    }
+    .tab-name {
+      font-weight: 600;
+    }
+    @media (max-width: 768px){
+      .grid-two {
+        grid-template-columns: 1fr;
+      }
+      .page-card {
+        padding: 16px 14px 20px;
+      }
+      .shell {
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="page-card">
+      <div class="label-pill">MANDEVAL</div>
+      <h1>Technical appendix and user guidance</h1>
+      <p style="font-size:13px;color:#4B5563;">
+        This appendix explains how the MANDEVAL web tool works, how each tab should be used, and how
+        the underlying preference and cost–benefit calculations are constructed. It has two parts:
+        a short guide for non-technical users and a more detailed section for technical readers.
+      </p>
+
+      <h2>Part A – For policymakers and non-technical users</h2>
+
+      <h3>1. What MANDEVAL does in plain language</h3>
+      <p>
+        MANDEVAL helps you compare different vaccine mandate designs. It combines three ingredients:
+      </p>
+      <ul>
+        <li>How the public in Australia, France and Italy feel about different mandate designs (from a survey experiment).</li>
+        <li>How many lives you expect to save per 100,000 people under each design.</li>
+        <li>How much it costs to run the mandate (administration, communication, enforcement, digital systems and support).</li>
+      </ul>
+      <p>
+        The tool turns these inputs into three simple outputs:
+      </p>
+      <ul>
+        <li><strong>Benefit–cost ratio (BCR)</strong> – whether the monetary value of lives saved is larger than the cost.</li>
+        <li><strong>Net benefit</strong> – benefits minus costs in your chosen currency.</li>
+        <li><strong>Predicted public support</strong> – the probability that people prefer “some mandate” over “no mandate” for this design.</li>
+      </ul>
+
+      <h3>2. Overview of the tabs</h3>
+
+      <p><span class="tab-name">Introduction</span> – gives a short overview and the main steps:</p>
+      <ul>
+        <li>Set general assumptions, configure a mandate, enter costs, then review results and save scenarios.</li>
+      </ul>
+
+      <p><span class="tab-name">Mandate design features</span> – describes the attributes used in the preference study:</p>
+      <ul>
+        <li>Who is covered (scope).</li>
+        <li>Who can be exempt (exemptions).</li>
+        <li>When the mandate is lifted (coverage threshold).</li>
+        <li>Expected lives saved (per 100,000 people).</li>
+      </ul>
+
+      <p><span class="tab-name">Settings &amp; assumptions</span> – lets you set:</p>
+      <ul>
+        <li>Analysis period (for example, 1, 2 or 5 years).</li>
+        <li>Currency label (for example, AUD, EUR or “local currency units”).</li>
+        <li>How you value each life saved (VSL, value per life-year, threshold), and the numeric value per life saved.</li>
+      </ul>
+
+      <p><span class="tab-name">Configuration</span> – defines a single mandate scenario:</p>
+      <ul>
+        <li>Country and outbreak scenario (mild or severe).</li>
+        <li>Scope, exemptions and coverage threshold.</li>
+        <li>Population covered (in millions).</li>
+        <li>Expected lives saved per 100,000 people (slider).</li>
+      </ul>
+      <p>
+        Once you click <strong>Apply configuration</strong>, MANDEVAL updates the “current configuration at a glance”,
+        shows model-based public support and generates a headline recommendation. You can then click
+        <strong>Save scenario</strong> to store this configuration for later comparison.
+      </p>
+
+      <p><span class="tab-name">Costing</span> – collects simple cost inputs:</p>
+      <ul>
+        <li>Programme administration.</li>
+        <li>Communication and engagement.</li>
+        <li>Enforcement and compliance.</li>
+        <li>Digital systems and certification.</li>
+        <li>Compensation and support.</li>
+      </ul>
+      <p>
+        The tool sums these values to compute total cost and expresses cost per 100,000 and per 1 million people.
+      </p>
+
+      <p><span class="tab-name">Results &amp; MRS</span> – shows:</p>
+      <ul>
+        <li>Benefit–cost ratio, net benefit, total lives saved and predicted support for the current configuration.</li>
+        <li>A ranked list of saved scenarios (once you have created them).</li>
+        <li>“Lives-saved equivalents” (marginal rates of substitution) that translate changes in design features into lives saved per 100,000.</li>
+      </ul>
+
+      <p><span class="tab-name">Saved scenarios</span> – lists all scenarios you have saved in this browser, with BCR, net benefit and support. You can remove scenarios here.</p>
+
+      <p><span class="tab-name">Briefings &amp; AI</span> – automatically generates briefing text you can paste into emails or documents. It also builds a structured prompt for Copilot or ChatGPT.</p>
+
+      <p><span class="tab-name">Exports</span> – lets you export scenarios to Excel, CSV or PDF, download a Word briefing, and clear locally stored scenarios.</p>
+
+      <h3>3. Worked example for non-technical users</h3>
+
+      <div class="example-box">
+        <div class="example-tag">Example</div>
+        <p><strong>Step 1 – Settings</strong>. Choose an analysis period of 2 years, set the currency label to “EUR”, select “Value of a statistical life (VSL)” and enter your preferred value per life saved.</p>
+        <p><strong>Step 2 – Configuration</strong>. Pick “Italy”, “Severe outbreak”, “All occupations and public spaces”, “Medical + religious exemptions”, “70% coverage to lift mandate”, 5 million people covered, and 25 lives saved per 100,000 people. Click <strong>Apply configuration</strong>.</p>
+        <p><strong>Step 3 – Costing</strong>. Enter approximate values for programme administration, communication, enforcement, digital systems and support, then click <strong>Apply costs</strong>.</p>
+        <p><strong>Step 4 – Results</strong>. Go to the “Results &amp; MRS” tab to see the BCR, net benefit, total lives saved and predicted public support. If the BCR is above 1 and predicted support is high, this looks like a strong candidate scenario.</p>
+        <p><strong>Step 5 – Saving and communicating</strong>. Click <strong>Save scenario</strong> on the Configuration tab. Under “Saved scenarios”, compare it to other options, and use the “Briefings &amp; AI” tab to quickly generate a short note for senior leaders.</p>
+      </div>
+
+      <h2>Part B – For technical users</h2>
+
+      <h3>4. Preference model and predicted support</h3>
+      <p>
+        MANDEVAL uses mixed logit estimates from the discrete choice experiment. In each country,
+        respondents completed choice tasks comparing two hypothetical mandate policies (A and B) and a
+        “no mandate” option. Alternatives A and B share the same attribute coefficients but differ by an
+        alternative-specific constant for option A. The no-mandate option has its own constant.
+      </p>
+      <p>
+        For a given configuration (country, outbreak scenario, scope, exemptions, coverage threshold and
+        expected lives saved per 100,000), the tool constructs a deterministic utility term
+        <span class="math">Xβ</span> using the relevant coefficients for:
+      </p>
+      <ul>
+        <li><em>Scope</em> (all occupations and public spaces vs high-risk only).</li>
+        <li><em>Exemption policy</em> (medical only; medical + religious; medical + religious + personal belief).</li>
+        <li><em>Coverage threshold</em> (70% and 90% vaccinated, with 50% as the reference category).</li>
+        <li><em>Expected lives saved</em> (continuous, per 100,000 people).</li>
+      </ul>
+      <p>
+        The tool then forms utility terms for:
+      </p>
+      <ul>
+        <li>Policy A: <span class="math">U<sub>A</sub> = ASC<sub>A</sub> + Xβ</span></li>
+        <li>Policy B: <span class="math">U<sub>B</sub> = Xβ</span></li>
+        <li>No mandate: <span class="math">U<sub>N</sub> = ASC<sub>N</sub></span></li>
+      </ul>
+      <p>
+        The mixed logit coefficients are used at their mean values. The predicted probability that an
+        individual chooses “some mandate” is:
+      </p>
+      <p class="math">
+        P(mandate) = [exp(U<sub>A</sub>) + exp(U<sub>B</sub>)] / [exp(U<sub>A</sub>) + exp(U<sub>B</sub>) + exp(U<sub>N</sub>)].
+      </p>
+      <p>
+        This probability is displayed as <strong>predicted public support</strong> under “Current configuration at a
+        glance”, on the “Results &amp; MRS” tab, and in the scenario tables and exports.
+      </p>
+
+      <h3>5. Cost–benefit calculations</h3>
+      <p>
+        Let:
+      </p>
+      <ul>
+        <li><span class="math">L</span> be expected lives saved per 100,000 people (from the configuration slider).</li>
+        <li><span class="math">P</span> be the population covered (in millions).</li>
+        <li><span class="math">V</span> be the value per life saved from the Settings tab (for example, a VSL).</li>
+        <li><span class="math">C</span> be total programme cost (sum of all cost components).</li>
+      </ul>
+      <p>
+        MANDEVAL computes:
+      </p>
+      <ul>
+        <li>Total lives saved: <span class="math">L<sub>total</sub> = L × (P × 10)</span> (because 1 million people consist of 10 blocks of 100,000).</li>
+        <li>Total monetary benefit: <span class="math">B = L<sub>total</sub> × V</span>.</li>
+        <li>Net benefit: <span class="math">NB = B − C</span>.</li>
+        <li>Benefit–cost ratio: <span class="math">BCR = B / C</span> (reported only when <span class="math">C &gt; 0</span>).</li>
+      </ul>
+      <p>
+        All cost and benefit values are displayed using the currency label defined in the Settings tab.
+      </p>
+
+      <h3>6. Marginal rates of substitution (MRS)</h3>
+      <p>
+        For each mandate attribute, the tool reports lives-saved equivalents using the marginal rate of
+        substitution:
+      </p>
+      <p class="math">
+        MRS<sub>k</sub> = − β<sub>k</sub> / β<sub>lives</sub>.
+      </p>
+      <p>
+        Here, <span class="math">β<sub>k</sub></span> is the coefficient for attribute <em>k</em> (for example, shifting from
+        “high-risk only” to “all occupations and public spaces”), and
+        <span class="math">β<sub>lives</sub></span> is the coefficient on the lives-saved attribute (per 100,000 people).
+      </p>
+      <p>
+        The MRS values are interpreted as the change in expected lives saved per 100,000 that produces
+        the same change in utility as a one-unit change in attribute <em>k</em>. Positive values indicate that the
+        attribute change reduces utility (equivalent to losses in lives saved), and negative values indicate
+        that the attribute change increases utility (equivalent to gains in lives saved).
+      </p>
+      <p>
+        MANDEVAL only reports MRS values for the attribute levels that are actually used in the current
+        configuration (for example, moving to population-wide scope or to a 90% coverage threshold).
+      </p>
+
+      <h3>7. Data storage and exports</h3>
+      <p>
+        Saved scenarios are stored locally in the browser using <code>localStorage</code> and are not transmitted
+        to any server. Excel, CSV, PDF and Word exports are generated on the client side using the
+        browser and downloaded directly to the user’s device.
+      </p>
+      <p>
+        The “Clear saved scenarios” button removes local data for MANDEVAL in the current browser.
+      </p>
+
+      <h3>8. Suggested workflow for reproducible analysis</h3>
+      <ul>
+        <li>Document the assumptions used for lives-saved estimates and the chosen value per life saved (with sources).</li>
+        <li>Configure each mandate of interest and save a scenario after costs have been entered.</li>
+        <li>Export scenarios to Excel or CSV for version-controlled storage and further analysis.</li>
+        <li>Use the Word or PDF exports to archive briefing material alongside technical appendices.</li>
+      </ul>
+
+    </div>
+  </div>
+</body>
+</html>
