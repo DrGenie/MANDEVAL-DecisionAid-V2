@@ -1,6 +1,24 @@
 'use strict';
 
 /* =========================================================
+   Global seed for reproducible mixed-logit draws
+   ========================================================= */
+
+const RANDOM_SEED = 123456789; // change this if you ever want a new fixed panel
+
+function mulberry32(a) {
+  return function () {
+    let t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// single PRNG instance for the whole file
+let prng = mulberry32(RANDOM_SEED);
+
+/* =========================================================
    Core state
    ========================================================= */
 
@@ -174,19 +192,19 @@ const coeffNames = [
   'lives'
 ];
 
-let standardNormalDraws = []; // deterministic within session
+let standardNormalDraws = []; // deterministic within and across sessions (given seed)
 let bcrChart = null;
 let supportChart = null;
 
 /* =========================================================
-   Random draws – deterministic set per session
+   Random draws – deterministic panel per seed
    ========================================================= */
 
 function randStdNormal() {
-  // Box–Muller transform
+  // Box–Muller transform using seeded PRNG
   let u = 0, v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
+  while (u === 0) u = prng();
+  while (v === 0) v = prng();
   return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 }
 
