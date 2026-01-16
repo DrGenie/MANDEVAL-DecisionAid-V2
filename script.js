@@ -1,5 +1,4 @@
 // MandEval – main logic
-
 // --- Global state -----------------------------------------------------------
 
 const state = {
